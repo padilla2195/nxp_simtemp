@@ -1,7 +1,10 @@
 # Untrack files generated during the compilation of the project
-kernel/*.cmd
-kernel/*.o
-kernel/*.symvers
-kernel/*.order
-kernel/*.ko
-kernel/*.mod*
+*.ko
+*.o
+*.mod
+*.mod.c
+*.mod.o
+*.symtypes
+*.order
+*.cmd
+*.symvers
