@@ -1,0 +1,1 @@
+savedcmd_nxp_simtemp.ko := ld -r -m elf_x86_64 -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /usr/src/linux-headers-6.14.0-32-generic/scripts/module.lds -o nxp_simtemp.ko nxp_simtemp.o nxp_simtemp.mod.o .module-common.o
