@@ -1,1 +1,0 @@
-./nxp_simtemp.o
