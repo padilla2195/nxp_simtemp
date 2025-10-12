@@ -5,11 +5,14 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
+#include <linux/device.h>
+#include <linux/fs.h>
+#include <linux/cdev.h>
 #include <linux/hrtimer.h>
 #include <linux/ktime.h>
-#include <linux/fs.h>
-#include <linux/device.h>
 #include <linux/random.h>
+#include <linux/poll.h>
+#include <linux/wait.h>
 
 
 
@@ -23,28 +26,43 @@
 #define MODE_NORMAL                                0U
 #define MODE_NOISY                                 1U
 #define MODE_RAMP                                  2U
+#define MAX_DEV                                    1U
+
+
+
+/*****************************/
+/**** Struct definitions *****/
+/*****************************/
+struct char_device_data {
+    struct cdev cdev;
+};
 
 
 
 /****************************/
 /**** Function prototypes ***/
 /****************************/
-enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer);
-__u32 simtemp_get_temperature(void);
+/* Call-back functions */
+static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer);
+static unsigned int simtemp_new_sample_poll(struct file *file, poll_table *wait);
+/* Temperature sensor functions */
+static __u32 simtemp_get_temperature(void);
+/* Init and Exit module functions */
 static int __init simtemp_module_start(void);
 static void __exit simtemp_module_exit(void);
-ssize_t simtemp_sysfs_sampling_time_show(struct device *d, struct device_attribute *attr, char *buf);
-ssize_t simtemp_sysfs_sampling_time_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
-ssize_t simtemp_sysfs_temperature_threshold_show(struct device *d, struct device_attribute *attr, char *buf);
-ssize_t simtemp_sysfs_temperature_threshold_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
-ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attribute *attr, char *buf);
-ssize_t simtemp_sysfs_timestamp_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
-ssize_t simtemp_sysfs_temp_mc_show(struct device *d, struct device_attribute *attr, char *buf);
-ssize_t simtemp_sysfs_temp_mc_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
-ssize_t simtemp_sysfs_flags_show(struct device *d, struct device_attribute *attr, char *buf);
-ssize_t simtemp_sysfs_flags_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
-ssize_t simtemp_sysfs_mode_show(struct device *d, struct device_attribute *attr, char *buf);
-ssize_t simtemp_sysfs_mode_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
+/* Sysfs functions */
+static ssize_t simtemp_sysfs_sampling_time_show(struct device *d, struct device_attribute *attr, char *buf);
+static ssize_t simtemp_sysfs_sampling_time_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
+static ssize_t simtemp_sysfs_temperature_threshold_show(struct device *d, struct device_attribute *attr, char *buf);
+static ssize_t simtemp_sysfs_temperature_threshold_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
+static ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attribute *attr, char *buf);
+static ssize_t simtemp_sysfs_timestamp_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
+static ssize_t simtemp_sysfs_temp_mc_show(struct device *d, struct device_attribute *attr, char *buf);
+static ssize_t simtemp_sysfs_temp_mc_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
+static ssize_t simtemp_sysfs_flags_show(struct device *d, struct device_attribute *attr, char *buf);
+static ssize_t simtemp_sysfs_flags_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
+static ssize_t simtemp_sysfs_mode_show(struct device *d, struct device_attribute *attr, char *buf);
+static ssize_t simtemp_sysfs_mode_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count);
 
 
 
@@ -65,12 +83,21 @@ static dev_t dev_nr;
 /* Variables for sysfs */
 static struct class *simtemp_class;
 static struct device *simtemp_dev;
-__u32 simtemp_sysfs_sampling_time = 200; /* sampling time initialized to 200ms */
-__s32 simtemp_sysfs_temperature_threshold = 40000; /* Threshold in mC */
-__u64 simtemp_sysfs_timestamp_ns; /* Timestamp in ns*/
-__u32 simtemp_sysfs_temp_mC; /* Measured temperature in mC */
-__u32 simtemp_sysfs_flags; /* Flags */
-__u32 simtemp_sysfs_mode = 0; /* Mode, possible values: 0 = Normal, 1 = Noisy, 2 = Ramp */
+static __u32 simtemp_sysfs_sampling_time = 200; /* sampling time initialized to 200ms */
+static __s32 simtemp_sysfs_temperature_threshold = 40000; /* Threshold in mC */
+static __u64 simtemp_sysfs_timestamp_ns; /* Timestamp in ns*/
+static __u32 simtemp_sysfs_temp_mC; /* Measured temperature in mC */
+static __u32 simtemp_sysfs_flags; /* Flags */
+static __u32 simtemp_sysfs_mode = 0; /* Mode, possible values: 0 = Normal, 1 = Noisy, 2 = Ramp */
+/* Variables for polling */
+static wait_queue_head_t wait_queue_new_sampling_available;
+/* Character device data */
+static struct char_device_data simtemp_char_dev_data;
+/* File Operations */
+static const struct file_operations chardev_fops = {
+    .poll = simtemp_new_sample_poll
+};
+
 
 
 /************************************/
@@ -95,8 +122,8 @@ static int __init simtemp_module_start(void)
 
     printk(KERN_INFO "Initializing simtemp module.\n");
 
-    /* Register character device, use a free device number  */
-    chr_dev_status = alloc_chrdev_region(&dev_nr, 0, MINORMASK + 1, "nxp_simtemp");
+    /* allocate chardev region and indicate the number of devices  */
+    chr_dev_status = alloc_chrdev_region(&dev_nr, 0, MAX_DEV, "nxp_simtemp");
     if(chr_dev_status != 0)
     {
         printk(KERN_ERR "simtemp - Error allocating the device number\n");
@@ -109,10 +136,16 @@ static int __init simtemp_module_start(void)
     {
         printk(KERN_ERR "simtemp - Error creating class\n");
         chr_dev_status = PTR_ERR(simtemp_class);
-        unregister_chrdev_region(dev_nr, MINORMASK + 1);
+        unregister_chrdev_region(dev_nr, MAX_DEV);
         return chr_dev_status;
     }
     
+    /* Init a new device */
+    cdev_init(&simtemp_char_dev_data.cdev, &chardev_fops);
+
+    /* Add device to the system */
+    cdev_add(&simtemp_char_dev_data.cdev, MKDEV(MAJOR(dev_nr), 0), 1);
+
     /* Create a device */
     simtemp_dev = device_create(simtemp_class, NULL, dev_nr, NULL, "simtemp_dev%d", MINOR(dev_nr));
     if(IS_ERR(simtemp_dev))
@@ -131,7 +164,6 @@ static int __init simtemp_module_start(void)
         device_destroy(simtemp_class, dev_nr);
         return chr_dev_status;
     }
-
     chr_dev_status = device_create_file(simtemp_dev, &dev_attr_simtemp_sysfs_temperature_threshold);
     if(chr_dev_status != 0)
     {
@@ -168,6 +200,9 @@ static int __init simtemp_module_start(void)
         return chr_dev_status;
     }
 
+    /* Init the waitqueue */
+    init_waitqueue_head(&wait_queue_new_sampling_available);
+
     /* Define the delay time */
     simtemp_timer_period = ktime_set(0, simtemp_sysfs_sampling_time * 1000000);
     /* Initialize the hrtimer */
@@ -193,22 +228,25 @@ static void __exit simtemp_module_exit(void)
     device_remove_file(simtemp_dev, &dev_attr_simtemp_sysfs_sampling_time);
     device_destroy(simtemp_class, dev_nr);
     class_destroy(simtemp_class);
-    unregister_chrdev_region(dev_nr, MINORMASK + 1);
+    unregister_chrdev_region(dev_nr, MAX_DEV);
 }
 
 
 
 /* @brief Timer callback function */
-enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
+static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
 {
     /* timesatmp measurement */
     simtemp_timestamp_start = ktime_get();
     simtemp_sysfs_timestamp_ns = ktime_to_ns(ktime_sub(simtemp_timestamp_start, simtemp_timestamp_stop));
     simtemp_timestamp_stop = simtemp_timestamp_start;
     printk(KERN_INFO "The timestamp is: %llu\n", simtemp_sysfs_timestamp_ns);
-    /* Get the temperature reading and the timestamp and store it into the binary record */
+    /* Get the temperature reading and store it into simtemp_sysfs_temp_mC */
     simtemp_sysfs_temp_mC = simtemp_get_temperature();
     printk(KERN_INFO "The temperature is: %u\n", simtemp_sysfs_temp_mC);
+    /* Notify that there is a new sample available */
+    simtemp_sysfs_flags = simtemp_sysfs_flags | 0x1U;
+    wake_up(&wait_queue_new_sampling_available);
     /* Check if the temperature has crossed the defined threshold */
     if(simtemp_sysfs_temp_mC > simtemp_sysfs_temperature_threshold)
     {
@@ -228,8 +266,25 @@ enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
 
 
 
+/* @brief Poll callback function for new sample available */
+static unsigned int simtemp_new_sample_poll(struct file *file, poll_table *wait)
+{
+    poll_wait(file, &wait_queue_new_sampling_available, wait);
+    /* Check if there is a new sample available */
+    if(simtemp_sysfs_flags & 0x1U)
+    {
+        /* Set the flag back to zero */
+        simtemp_sysfs_flags = simtemp_sysfs_flags & 0x2U;
+        return POLLIN;
+    }
+    return 0;
+}
+
+
+
+
 /* @brief This function simulates the process to obtain temperature samples */
-__u32 simtemp_get_temperature(void)
+static __u32 simtemp_get_temperature(void)
 {
     __u16 random_value;
     /* Ramp the temperature up until the threshold defined by UPPER_THRESHOLD_TEMP_SIMULATION_MILI_C is reached
@@ -277,7 +332,7 @@ __u32 simtemp_get_temperature(void)
 
 
 /* @brief Show function for reading the contents of simtemp_sysfs_sampling_time */
-ssize_t simtemp_sysfs_sampling_time_show(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t simtemp_sysfs_sampling_time_show(struct device *d, struct device_attribute *attr, char *buf)
 {
     return sprintf(buf, "%u", simtemp_sysfs_sampling_time);
 }
@@ -285,7 +340,7 @@ ssize_t simtemp_sysfs_sampling_time_show(struct device *d, struct device_attribu
 
 
 /* @brief Define the store function for writing to simtemp_sysfs_sampling_time */
-ssize_t simtemp_sysfs_sampling_time_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t simtemp_sysfs_sampling_time_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
     if(sscanf(buf, "%du", &simtemp_sysfs_sampling_time) != 1)
     {
@@ -297,7 +352,7 @@ ssize_t simtemp_sysfs_sampling_time_store(struct device *d, struct device_attrib
 
 
 /* @brief Show function for reading the contents of simtemp_sysfs_temperature_threshold */
-ssize_t simtemp_sysfs_temperature_threshold_show(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t simtemp_sysfs_temperature_threshold_show(struct device *d, struct device_attribute *attr, char *buf)
 {
     return sprintf(buf, "%u", simtemp_sysfs_temperature_threshold);
 }
@@ -305,7 +360,7 @@ ssize_t simtemp_sysfs_temperature_threshold_show(struct device *d, struct device
 
 
 /* @brief Define the store function for writing to simtemp_sysfs_temperature_threshold */
-ssize_t simtemp_sysfs_temperature_threshold_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t simtemp_sysfs_temperature_threshold_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
     if(sscanf(buf, "%du", &simtemp_sysfs_temperature_threshold) != 1)
     {
@@ -317,7 +372,7 @@ ssize_t simtemp_sysfs_temperature_threshold_store(struct device *d, struct devic
 
 
 /* @brief Show function for reading the contents of simtemp_sysfs_timestamp_ns */
-ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attribute *attr, char *buf)
 {
     return sprintf(buf, "%llu", simtemp_sysfs_timestamp_ns);
 }
@@ -325,7 +380,7 @@ ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attribute *
 
 
 /* @brief Define the store function for writing to simtemp_sysfs_timestamp_ns */
-ssize_t simtemp_sysfs_timestamp_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t simtemp_sysfs_timestamp_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
     if(sscanf(buf, "%lld", &simtemp_sysfs_timestamp_ns) != 1)
     {
@@ -337,7 +392,7 @@ ssize_t simtemp_sysfs_timestamp_store(struct device *d, struct device_attribute 
 
 
 /* @brief Show function for reading the contents of simtemp_sysfs_temp_mC */
-ssize_t simtemp_sysfs_temp_mc_show(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t simtemp_sysfs_temp_mc_show(struct device *d, struct device_attribute *attr, char *buf)
 {
     return sprintf(buf, "%u", simtemp_sysfs_temp_mC);
 }
@@ -345,7 +400,7 @@ ssize_t simtemp_sysfs_temp_mc_show(struct device *d, struct device_attribute *at
 
 
 /* @brief Define the store function for writing to simtemp_sysfs_temp_mC */
-ssize_t simtemp_sysfs_temp_mc_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t simtemp_sysfs_temp_mc_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
     if(sscanf(buf, "%du", &simtemp_sysfs_temp_mC) != 1)
     {
@@ -357,7 +412,7 @@ ssize_t simtemp_sysfs_temp_mc_store(struct device *d, struct device_attribute *a
 
 
 /* @brief Show function for reading the contents of simtemp_sysfs_flags */
-ssize_t simtemp_sysfs_flags_show(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t simtemp_sysfs_flags_show(struct device *d, struct device_attribute *attr, char *buf)
 {
     return sprintf(buf, "%u", simtemp_sysfs_flags);
 }
@@ -365,7 +420,7 @@ ssize_t simtemp_sysfs_flags_show(struct device *d, struct device_attribute *attr
 
 
 /* @brief Define the store function for writing to simtemp_sysfs_flags */
-ssize_t simtemp_sysfs_flags_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t simtemp_sysfs_flags_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
     if(sscanf(buf, "%du", &simtemp_sysfs_flags) != 1)
     {
@@ -377,7 +432,7 @@ ssize_t simtemp_sysfs_flags_store(struct device *d, struct device_attribute *att
 
 
 /* @brief Show function for reading the contents of simtemp_sysfs_mode */
-ssize_t simtemp_sysfs_mode_show(struct device *d, struct device_attribute *attr, char *buf)
+static ssize_t simtemp_sysfs_mode_show(struct device *d, struct device_attribute *attr, char *buf)
 {
     return sprintf(buf, "%u", simtemp_sysfs_mode);
 }
@@ -385,7 +440,7 @@ ssize_t simtemp_sysfs_mode_show(struct device *d, struct device_attribute *attr,
 
 
 /* @brief Define the store function for writing to simtemp_sysfs_mode */
-ssize_t simtemp_sysfs_mode_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t simtemp_sysfs_mode_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
     if(sscanf(buf, "%du", &simtemp_sysfs_mode) != 1)
     {

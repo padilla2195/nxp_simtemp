@@ -8,3 +8,4 @@
 *.order
 *.cmd
 *.symvers
+*.out
