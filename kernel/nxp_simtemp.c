@@ -10,6 +10,7 @@
 #include <linux/cdev.h>
 #include <linux/hrtimer.h>
 #include <linux/ktime.h>
+#include <linux/rtc.h>
 #include <linux/random.h>
 #include <linux/poll.h>
 #include <linux/wait.h>
@@ -47,6 +48,7 @@ static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer);
 static unsigned int simtemp_new_sample_poll(struct file *file, poll_table *wait);
 /* Temperature sensor functions */
 static __u32 simtemp_get_temperature(void);
+static void simtemp_get_timestamp(void);
 /* Init and Exit module functions */
 static int __init simtemp_module_start(void);
 static void __exit simtemp_module_exit(void);
@@ -75,9 +77,6 @@ static ktime_t simtemp_timer_period;
 /* Temperature sensing variables */
 static __s32 simtemp_temperature_sensor_reading = 32000U;
 static bool  simtemp_temperature_sensor_increment_flag = true; // True:temperature is incremented, False:temperature is decremented
-/* Variables for timestamp measurements */
-static ktime_t simtemp_timestamp_start;
-static ktime_t simtemp_timestamp_stop;
 /* Character device variables */
 static dev_t dev_nr;
 /* Variables for sysfs */
@@ -85,7 +84,7 @@ static struct class *simtemp_class;
 static struct device *simtemp_dev;
 static __u32 simtemp_sysfs_sampling_time = 200; /* sampling time initialized to 200ms */
 static __s32 simtemp_sysfs_temperature_threshold = 40000; /* Threshold in mC */
-static __u64 simtemp_sysfs_timestamp_ns; /* Timestamp in ns*/
+static char simtemp_sysfs_timestamp_ns[100]; /* Timestamp */
 static __u32 simtemp_sysfs_temp_mC; /* Measured temperature in mC */
 static __u32 simtemp_sysfs_flags; /* Flags */
 static __u32 simtemp_sysfs_mode = 0; /* Mode, possible values: 0 = Normal, 1 = Noisy, 2 = Ramp */
@@ -237,10 +236,8 @@ static void __exit simtemp_module_exit(void)
 static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
 {
     /* timesatmp measurement */
-    simtemp_timestamp_start = ktime_get();
-    simtemp_sysfs_timestamp_ns = ktime_to_ns(ktime_sub(simtemp_timestamp_start, simtemp_timestamp_stop));
-    simtemp_timestamp_stop = simtemp_timestamp_start;
-    printk(KERN_INFO "The timestamp is: %llu\n", simtemp_sysfs_timestamp_ns);
+    simtemp_get_timestamp();
+    printk(KERN_INFO "The timestamp is: %s\n", simtemp_sysfs_timestamp_ns);
     /* Get the temperature reading and store it into simtemp_sysfs_temp_mC */
     simtemp_sysfs_temp_mC = simtemp_get_temperature();
     printk(KERN_INFO "The temperature is: %u\n", simtemp_sysfs_temp_mC);
@@ -331,6 +328,24 @@ static __u32 simtemp_get_temperature(void)
 
 
 
+static void simtemp_get_timestamp(void)
+{
+    ktime_t now_time;
+    struct rtc_time tm;
+    __u64 nanoseconds;
+    __u64 milliseconds;
+
+    now_time = ktime_get_real();
+    nanoseconds = ktime_to_ns(now_time) % 1000000000;
+    milliseconds = nanoseconds / 1000000;
+
+    tm = rtc_ktime_to_tm(now_time);
+
+    sprintf(simtemp_sysfs_timestamp_ns, "Timestamp: %d-%d-%d, T%d:%d:%d:%lld", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, milliseconds);
+}
+
+
+
 /* @brief Show function for reading the contents of simtemp_sysfs_sampling_time */
 static ssize_t simtemp_sysfs_sampling_time_show(struct device *d, struct device_attribute *attr, char *buf)
 {
@@ -374,7 +389,7 @@ static ssize_t simtemp_sysfs_temperature_threshold_store(struct device *d, struc
 /* @brief Show function for reading the contents of simtemp_sysfs_timestamp_ns */
 static ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%llu", simtemp_sysfs_timestamp_ns);
+    return sprintf(buf, "%s", simtemp_sysfs_timestamp_ns);
 }
 
 
@@ -382,7 +397,7 @@ static ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attr
 /* @brief Define the store function for writing to simtemp_sysfs_timestamp_ns */
 static ssize_t simtemp_sysfs_timestamp_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
-    if(sscanf(buf, "%lld", &simtemp_sysfs_timestamp_ns) != 1)
+    if(sscanf(buf, "%s", simtemp_sysfs_timestamp_ns) != 1)
     {
         return -EINVAL;
     }

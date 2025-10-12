@@ -53,7 +53,7 @@ void read_temperature_and_timestamp()
 {
     int deviceFile;
     struct pollfd my_poll;
-    FILE *fileOpenTemp = NULL;
+    FILE *fileOpen = NULL;
     char buffer[256];
 
     /* Open the device file */
@@ -61,7 +61,7 @@ void read_temperature_and_timestamp()
     if(deviceFile < 0)
     {
         perror("Could not open the device file \n");
-        return -1;
+        return ;
     }
 
     /* Poll initialization */
@@ -75,14 +75,15 @@ void read_temperature_and_timestamp()
         poll(&my_poll, 1, sampling_time);
         if(my_poll.revents & POLLIN)
         {
-            fileOpenTemp = fopen("/sys/class/simtemp_class/simtemp_dev0/simtemp_sysfs_temp_mC", "r");
-            if(fileOpenTemp != NULL)
+            /* Temperature */
+            fileOpen = fopen("/sys/class/simtemp_class/simtemp_dev0/simtemp_sysfs_temp_mC", "r");
+            if(fileOpen != NULL)
             {
-                if(fgets(buffer, sizeof(buffer), fileOpenTemp) != NULL)
+                if(fgets(buffer, sizeof(buffer), fileOpen) != NULL)
                 {
                     printf("Temperature reading in mC: %s \n", buffer);
                     printf("It took %d ms to get the temperature. The sampling time temperature is: %d \n", sampling_time * period_counter, sampling_time);
-                    fclose(fileOpenTemp);
+                    fclose(fileOpen);
                 }
                 else
                 {
@@ -92,6 +93,25 @@ void read_temperature_and_timestamp()
             else
             {
                 printf("Error reading the temperature \n");
+            }
+
+            /* Time Stamp */
+            fileOpen = fopen("/sys/class/simtemp_class/simtemp_dev0/simtemp_sysfs_timestamp_ns", "r");
+            if(fileOpen != NULL)
+            {
+                if(fgets(buffer, sizeof(buffer), fileOpen) != NULL)
+                {
+                    printf("%s \n", buffer);
+                    fclose(fileOpen);
+                }
+                else
+                {
+                    printf("Error reading the timestamp \n");
+                }
+            }
+            else
+            {
+                printf("Error reading the timestamp \n");
             }
             break;
         }
@@ -122,7 +142,7 @@ int main()
                 printf("GoodBye! \n");
                 break;
         }
-        if(selectedOption != MENU_EXIT);
+        if(selectedOption != MENU_EXIT)
         {
             stop_system();
             CLEAN_SCREEN;
