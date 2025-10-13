@@ -84,7 +84,7 @@ static struct class *simtemp_class;
 static struct device *simtemp_dev;
 static __u32 simtemp_sysfs_sampling_time = 200; /* sampling time initialized to 200ms */
 static __s32 simtemp_sysfs_temperature_threshold = 40000; /* Threshold in mC */
-static char simtemp_sysfs_timestamp_ns[100]; /* Timestamp */
+static char simtemp_sysfs_timestamp[100]; /* Timestamp */
 static __u32 simtemp_sysfs_temp_mC; /* Measured temperature in mC */
 static __u32 simtemp_sysfs_flags; /* Flags */
 static __u32 simtemp_sysfs_mode = 0; /* Mode, possible values: 0 = Normal, 1 = Noisy, 2 = Ramp */
@@ -104,7 +104,7 @@ static const struct file_operations chardev_fops = {
 /************************************/
 DEVICE_ATTR(simtemp_sysfs_sampling_time, 0660, simtemp_sysfs_sampling_time_show, simtemp_sysfs_sampling_time_store);
 DEVICE_ATTR(simtemp_sysfs_temperature_threshold, 0660, simtemp_sysfs_temperature_threshold_show, simtemp_sysfs_temperature_threshold_store);
-DEVICE_ATTR(simtemp_sysfs_timestamp_ns, 0660, simtemp_sysfs_timestamp_show, simtemp_sysfs_timestamp_store);
+DEVICE_ATTR(simtemp_sysfs_timestamp, 0660, simtemp_sysfs_timestamp_show, simtemp_sysfs_timestamp_store);
 DEVICE_ATTR(simtemp_sysfs_temp_mC, 0660, simtemp_sysfs_temp_mc_show, simtemp_sysfs_temp_mc_store);
 DEVICE_ATTR(simtemp_sysfs_flags, 0660, simtemp_sysfs_flags_show, simtemp_sysfs_flags_store);
 DEVICE_ATTR(simtemp_sysfs_mode, 0660, simtemp_sysfs_mode_show, simtemp_sysfs_mode_store);
@@ -170,7 +170,7 @@ static int __init simtemp_module_start(void)
         device_destroy(simtemp_class, dev_nr);
         return chr_dev_status;
     }
-    chr_dev_status = device_create_file(simtemp_dev, &dev_attr_simtemp_sysfs_timestamp_ns);
+    chr_dev_status = device_create_file(simtemp_dev, &dev_attr_simtemp_sysfs_timestamp);
     if(chr_dev_status != 0)
     {
         printk(KERN_ERR "simtemp - Error creating timestamp attribute\n");
@@ -237,11 +237,11 @@ static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
 {
     /* timesatmp measurement */
     simtemp_get_timestamp();
-    printk(KERN_INFO "The timestamp is: %s\n", simtemp_sysfs_timestamp_ns);
+    printk(KERN_INFO "The timestamp is: %s\n", simtemp_sysfs_timestamp);
     /* Get the temperature reading and store it into simtemp_sysfs_temp_mC */
     simtemp_sysfs_temp_mC = simtemp_get_temperature();
     printk(KERN_INFO "The temperature is: %u\n", simtemp_sysfs_temp_mC);
-    /* Notify that there is a new sample available */
+    /* Notify that there is a new sample available by setting bit 0 */
     simtemp_sysfs_flags = simtemp_sysfs_flags | 0x1U;
     wake_up(&wait_queue_new_sampling_available);
     /* Check if the temperature has crossed the defined threshold */
@@ -276,7 +276,6 @@ static unsigned int simtemp_new_sample_poll(struct file *file, poll_table *wait)
     }
     return 0;
 }
-
 
 
 
@@ -341,7 +340,7 @@ static void simtemp_get_timestamp(void)
 
     tm = rtc_ktime_to_tm(now_time);
 
-    sprintf(simtemp_sysfs_timestamp_ns, "Timestamp: %d-%d-%d, T%d:%d:%d:%lld", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, milliseconds);
+    sprintf(simtemp_sysfs_timestamp, "%d-%d-%d, T%d:%d:%d:%lld", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, milliseconds);
 }
 
 
@@ -386,18 +385,18 @@ static ssize_t simtemp_sysfs_temperature_threshold_store(struct device *d, struc
 
 
 
-/* @brief Show function for reading the contents of simtemp_sysfs_timestamp_ns */
+/* @brief Show function for reading the contents of simtemp_sysfs_timestamp */
 static ssize_t simtemp_sysfs_timestamp_show(struct device *d, struct device_attribute *attr, char *buf)
 {
-    return sprintf(buf, "%s", simtemp_sysfs_timestamp_ns);
+    return sprintf(buf, "%s", simtemp_sysfs_timestamp);
 }
 
 
 
-/* @brief Define the store function for writing to simtemp_sysfs_timestamp_ns */
+/* @brief Define the store function for writing to simtemp_sysfs_timestamp */
 static ssize_t simtemp_sysfs_timestamp_store(struct device *d, struct device_attribute *attr, const char *buf, size_t count)
 {
-    if(sscanf(buf, "%s", simtemp_sysfs_timestamp_ns) != 1)
+    if(sscanf(buf, "%s", simtemp_sysfs_timestamp) != 1)
     {
         return -EINVAL;
     }
