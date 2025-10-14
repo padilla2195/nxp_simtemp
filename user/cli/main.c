@@ -14,6 +14,7 @@
 #define MENU_CONF_MODE                 3U
 #define MENU_READ_TEMP                 4U
 #define MENU_READ_TEMP_SEVERAL_RECORDS 5U
+#define MENU_TEST_MODE                 6U
 #define MENU_EXIT                      7U
 
 
@@ -87,6 +88,47 @@ void write_sysfs_file_integer_value(char * sysfs_path, char * message_input)
     {
         /* Convert integer value to string */
         data_len = snprintf(buffer, sizeof(buffer), "%d\n", value);
+        if (data_len < 0)
+        {
+            printf("Error Converting the inpunt integer value to string \n");
+            close(fd);
+        }
+        else
+        {
+            /* Write the string to the sysfs file */
+            if(write(fd, buffer, data_len) == -1)
+            {
+                close(fd);
+                printf("Error writing to the sysfs file \n");
+            }
+            else
+            {
+                printf("The value has been written succesfully! \n");
+            }
+        }
+    }
+
+    close(fd);
+}
+
+
+
+void write_sysfs_file_integer_value_no_scanf(char * sysfs_path, int val)
+{
+    int fd;
+    int data_len;
+    char buffer[32];
+
+    /* Open the sysfs file */
+    fd = open(sysfs_path, O_WRONLY);
+    if(fd == -1)
+    {
+        printf("Error Opening the Sysfs file \n");
+    }
+    else
+    {
+        /* Convert integer value to string */
+        data_len = snprintf(buffer, sizeof(buffer), "%d\n", val);
         if (data_len < 0)
         {
             printf("Error Converting the inpunt integer value to string \n");
@@ -194,7 +236,7 @@ void read_temperature_and_timestamp()
 
 
 
-void read_temperature_and_timestamp_print_several_records()
+void read_temperature_and_timestamp_print_several_records(void)
 {
     int number_of_records_to_print = 0;
     printf("How Many Records would you like to print?: ");
@@ -203,6 +245,44 @@ void read_temperature_and_timestamp_print_several_records()
     {
         read_temperature_and_timestamp();
         number_of_records_to_print--;
+    }
+}
+
+
+
+void enter_test_mode(void)
+{
+    /* Poll variables */
+    struct pollfd my_poll;
+
+    /* Variables setting */
+    period_counter = 0;
+
+    /* Poll initialization */
+    memset(&my_poll, 0, sizeof(my_poll));
+    my_poll.fd = deviceFile;
+    my_poll.events = POLLPRI;
+    period_counter = 0;
+
+    /* Set the acquisition mode to Normal */
+    write_sysfs_file_integer_value_no_scanf("/sys/class/simtemp_class/simtemp_dev0/simtemp_sysfs_mode", 0U);
+
+    /* Set the temperature threshold slightly below the Normal Temperature */
+    write_sysfs_file_integer_value_no_scanf("/sys/class/simtemp_class/simtemp_dev0/simtemp_sysfs_temperature_threshold", 31000U);
+
+    /* Wait for the poll event to detect the fault */
+    while(1)
+    {
+        poll(&my_poll, 1, sampling_time);
+        if(my_poll.revents & POLLPRI)
+        {
+            printf("It took %d ms to detect the fault. \n", sampling_time * period_counter);
+            break;
+        }
+        else
+        {
+            period_counter++;
+        }
     }
 }
 
@@ -251,6 +331,11 @@ int main()
                 case MENU_EXIT:
                     printf("GoodBye! \n");
                     break;
+
+                case MENU_TEST_MODE:
+                enter_test_mode();
+                    break;
+
                 default:
                     printf("An incorrect option was selected. Try again...\n");
                     break;

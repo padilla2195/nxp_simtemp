@@ -45,7 +45,7 @@ struct char_device_data {
 /****************************/
 /* Call-back functions */
 static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer);
-static unsigned int simtemp_new_sample_poll(struct file *file, poll_table *wait);
+static unsigned int simtemp_new_event_poll(struct file *file, poll_table *wait);
 /* Temperature sensor functions */
 static __u32 simtemp_get_temperature(void);
 static void simtemp_get_timestamp(void);
@@ -90,11 +90,12 @@ static __u32 simtemp_sysfs_flags; /* Flags */
 static __u32 simtemp_sysfs_mode = 0; /* Mode, possible values: 0 = Normal, 1 = Noisy, 2 = Ramp */
 /* Variables for polling */
 static wait_queue_head_t wait_queue_new_sampling_available;
+static wait_queue_head_t wait_queue_thres_cross;
 /* Character device data */
 static struct char_device_data simtemp_char_dev_data;
 /* File Operations */
 static const struct file_operations chardev_fops = {
-    .poll = simtemp_new_sample_poll
+    .poll = simtemp_new_event_poll
 };
 
 
@@ -201,6 +202,7 @@ static int __init simtemp_module_start(void)
 
     /* Init the waitqueue */
     init_waitqueue_head(&wait_queue_new_sampling_available);
+    init_waitqueue_head(&wait_queue_thres_cross);
 
     /* Define the delay time */
     simtemp_timer_period = ktime_set(0, simtemp_sysfs_sampling_time * 1000000);
@@ -250,6 +252,8 @@ static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
         printk(KERN_INFO "The temperature has crossed the define threshold");
         /* Set bit 1 of flags variable to 1 indicating that the threshold has been crossed */
         simtemp_sysfs_flags = simtemp_sysfs_flags | 0x2;
+        /* Notify that the threshold has been crossed */
+        wake_up(&wait_queue_thres_cross);
     }
     else
     {
@@ -263,10 +267,16 @@ static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
 
 
 
-/* @brief Poll callback function for new sample available */
-static unsigned int simtemp_new_sample_poll(struct file *file, poll_table *wait)
+/* @brief Poll callback function for new sample or error event detection */
+static unsigned int simtemp_new_event_poll(struct file *file, poll_table *wait)
 {
     poll_wait(file, &wait_queue_new_sampling_available, wait);
+    poll_wait(file, &wait_queue_thres_cross, wait);
+    /* Check if an error has been detected */
+    if(simtemp_sysfs_flags & 0x2U)
+    {
+        return POLLPRI;
+    }
     /* Check if there is a new sample available */
     if(simtemp_sysfs_flags & 0x1U)
     {
@@ -331,15 +341,13 @@ static void simtemp_get_timestamp(void)
 {
     ktime_t now_time;
     struct rtc_time tm;
-    __u64 nanoseconds;
     __u64 milliseconds;
-
+    /*  Retrive the current real time of the system*/
     now_time = ktime_get_real();
-    nanoseconds = ktime_to_ns(now_time) % 1000000000;
-    milliseconds = nanoseconds / 1000000;
-
     tm = rtc_ktime_to_tm(now_time);
-
+    /* Get the corresponding millisecond values */
+    milliseconds = ktime_to_ms(now_time) & 0x3E7;
+    /* Store the information as string into simtemp_sysfs_timestamp */
     sprintf(simtemp_sysfs_timestamp, "%d-%d-%d, T%d:%d:%d:%lld", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec, milliseconds);
 }
 
