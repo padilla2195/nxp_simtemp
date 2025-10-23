@@ -9,3 +9,10 @@
 *.cmd
 *.symvers
 *.out
+*.js
+*.html
+*.css
+*.svg
+*.tex
+*.sty
+doxygen/output/latex/Makefile

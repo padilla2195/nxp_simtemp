@@ -1,3 +1,12 @@
+/**
+ * @file nxp_simtemp.c
+ * @brief This source file implements the NXP Systems Software Engineer Candidate Challenge.
+ *        Goal: Build a small system that simulates a hardware sensor in the linux Kernel and exposes
+ *        it to user space.
+ * @author Enrique Alejandro Padilla Sanchez
+ * @date 23/Oct/2025
+ */
+
 /******************/
 /**** Includes ****/
 /******************/
@@ -71,9 +80,17 @@ static ssize_t simtemp_sysfs_mode_store(struct device *d, struct device_attribut
 /***************************************/
 /**** Static variables definitions *****/
 /***************************************/
-/* Timer Variables */
+
+/**
+ * @brief Static variable used to set-up the hrtimer used to read the temperature sensor value
+ */
 static struct hrtimer simtemp_sampling_timer;
+
+/**
+ * @brief Static variable that holds the hrtimer period. The value is changed by user application.
+ */
 static ktime_t simtemp_timer_period;
+
 /* Temperature sensing variables */
 static __s32 simtemp_temperature_sensor_reading = 32000U;
 static bool  simtemp_temperature_sensor_increment_flag = true; // True:temperature is incremented, False:temperature is decremented
@@ -270,21 +287,22 @@ static enum hrtimer_restart simtemp_timer_callback(struct hrtimer *timer)
 /* @brief Poll callback function for new sample or error event detection */
 static unsigned int simtemp_new_event_poll(struct file *file, poll_table *wait)
 {
+    int ret_value = 0U;
     poll_wait(file, &wait_queue_new_sampling_available, wait);
     poll_wait(file, &wait_queue_thres_cross, wait);
     /* Check if an error has been detected */
     if(simtemp_sysfs_flags & 0x2U)
     {
-        return POLLPRI;
+        ret_value = ret_value | POLLPRI;
     }
     /* Check if there is a new sample available */
     if(simtemp_sysfs_flags & 0x1U)
     {
         /* Set the flag back to zero */
         simtemp_sysfs_flags = simtemp_sysfs_flags & 0x2U;
-        return POLLIN;
+        ret_value = ret_value | POLLIN;
     }
-    return 0;
+    return ret_value;
 }
 
 
