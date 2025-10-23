@@ -81,16 +81,9 @@ static ssize_t simtemp_sysfs_mode_store(struct device *d, struct device_attribut
 /**** Static variables definitions *****/
 /***************************************/
 
-/**
- * @brief Static variable used to set-up the hrtimer used to read the temperature sensor value
- */
+/* hrtimer variables */
 static struct hrtimer simtemp_sampling_timer;
-
-/**
- * @brief Static variable that holds the hrtimer period. The value is changed by user application.
- */
 static ktime_t simtemp_timer_period;
-
 /* Temperature sensing variables */
 static __s32 simtemp_temperature_sensor_reading = 32000U;
 static bool  simtemp_temperature_sensor_increment_flag = true; // True:temperature is incremented, False:temperature is decremented
