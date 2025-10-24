@@ -19,6 +19,11 @@ SUMMARY and GOALS
 
 
 
+AUTHOR: Enrique Alejandro Padilla Sanchez
+E-MAIL: pandilla2195@hotmail.com
+
+
+
 LINK TO GIT REPOSITORY
 
 https://github.com/padilla2195/nxp_simtemp
