@@ -19,9 +19,15 @@ SUMMARY and GOALS
 
 
 
+LINK TO GIT REPOSITORY
+
+https://github.com/padilla2195/nxp_simtemp
+
+
+
 DEMO VIDEO
 
-The link to the live video demo can be found at docs/NXP_SIMTEMP_DEMO.mp4
+The link to the live video demo can be found at docs/NXP_SIMTEMP_DEMO.mp4 at the git repository
 
 
 
